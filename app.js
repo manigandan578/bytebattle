@@ -417,7 +417,7 @@
       }
 
       if (data.type === 'QUESTION_ADVANCE' && state.currentParticipant) {
-        if (data.payload?.quizCode === state.selectedQuiz?.code && state.studentStep === 'waiting_for_next_question') {
+        if (data.payload?.quizCode === state.selectedQuiz?.code && ['active_quiz', 'waiting_for_next_question'].includes(state.studentStep)) {
           advanceStudentToQuestion(data.payload.questionIndex);
           return;
         }
@@ -593,7 +593,7 @@
         if (state.secondsRemaining <= 0) {
           clearIntervalTimer();
           if (isCurrentQuestionAnswered()) {
-            refreshQuestionReadiness(true);
+            moveToNextQuestionAfterTimeout();
           } else {
             handleOptionSubmit(true);
           }
@@ -686,8 +686,23 @@
       } else {
         state.studentStep = 'active_quiz';
         renderApp();
-        refreshQuestionReadiness(false);
+        if (isAuto) {
+          moveToNextQuestionAfterTimeout();
+        } else {
+          refreshQuestionReadiness(false);
+        }
       }
+    }
+
+    function moveToNextQuestionAfterTimeout() {
+      const quiz = state.selectedQuiz;
+      if (!quiz) return;
+
+      const nextQuestionIndex = state.currentQuestionIndex + 1;
+      if (nextQuestionIndex >= quiz.questions.length) return;
+
+      broadcastMessage('QUESTION_ADVANCE', { quizCode: quiz.code, questionIndex: nextQuestionIndex });
+      advanceStudentToQuestion(nextQuestionIndex);
     }
 
     function disqualifyCurrentParticipant(reason) {
