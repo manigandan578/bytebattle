@@ -332,7 +332,7 @@
 
         if (syncStudentQuizState()) return;
 
-        if (state.currentView === 'student' && ['active_quiz', 'waiting_for_results', 'waiting_room'].includes(state.studentStep) && state.selectedQuiz?.status === 'results_revealed') {
+        if (state.currentView === 'student' && ['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'waiting_room'].includes(state.studentStep) && state.selectedQuiz?.status === 'results_revealed') {
           clearIntervalTimer();
           state.studentStep = 'leaderboard';
           renderApp();
@@ -370,9 +370,23 @@
         }
       }
 
+      if (data.type === 'QUESTION_ADVANCE' && state.currentParticipant) {
+        if (data.payload?.quizCode === state.selectedQuiz?.code && state.studentStep === 'waiting_for_next_question') {
+          advanceStudentToQuestion(data.payload.questionIndex);
+          return;
+        }
+      }
+
+      if (data.type === 'PARTICIPANT_ANSWERED') {
+        if (state.studentStep === 'waiting_for_next_question') {
+          tryAdvanceQuestionForEveryone();
+          return;
+        }
+      }
+
       if (data.type === 'SHOW_RESULTS') {
         if (data.payload?.quizCode === state.selectedQuiz?.code) {
-          if (['active_quiz', 'waiting_for_results', 'waiting_room'].includes(state.studentStep)) {
+          if (['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'waiting_room'].includes(state.studentStep)) {
             clearIntervalTimer();
             state.studentStep = 'leaderboard';
             renderApp();
@@ -479,6 +493,36 @@
       renderApp();
     }
 
+    function advanceStudentToQuestion(questionIndex) {
+      const quiz = state.selectedQuiz;
+      if (!quiz || questionIndex >= quiz.questions.length) return;
+
+      clearIntervalTimer();
+      state.studentStep = 'active_quiz';
+      state.currentQuestionIndex = questionIndex;
+      state.selectedOptionIndex = null;
+      startQuestionTimer();
+      renderApp();
+    }
+
+    function tryAdvanceQuestionForEveryone() {
+      const quiz = state.selectedQuiz;
+      if (!quiz || state.studentStep !== 'waiting_for_next_question') return false;
+
+      const quizParticipants = state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified');
+      const currentQuestion = quiz.questions[state.currentQuestionIndex];
+      const everyoneAnswered = quizParticipants.length > 0 && quizParticipants.every(participant =>
+        (participant.answers || []).some(answer => answer.questionId === currentQuestion.id)
+      );
+
+      if (!everyoneAnswered) return false;
+
+      const nextQuestionIndex = state.currentQuestionIndex + 1;
+      broadcastMessage('QUESTION_ADVANCE', { quizCode: quiz.code, questionIndex: nextQuestionIndex });
+      advanceStudentToQuestion(nextQuestionIndex);
+      return true;
+    }
+
     function startQuestionTimer() {
       clearIntervalTimer();
       const quiz = state.selectedQuiz;
@@ -572,10 +616,9 @@
           renderApp();
         }
       } else {
-        state.currentQuestionIndex += 1;
-        state.selectedOptionIndex = null;
-        startQuestionTimer();
+        state.studentStep = 'waiting_for_next_question';
         renderApp();
+        tryAdvanceQuestionForEveryone();
       }
     }
 
@@ -723,6 +766,7 @@
           case 'waiting_room': content = renderWaitingRoomHTML(); break;
           case 'active_quiz': content = renderActiveQuizHTML(); break;
           case 'disqualified': content = renderDisqualifiedHTML(); break;
+          case 'waiting_for_next_question': content = renderWaitingForNextQuestionHTML(); break;
           case 'waiting_for_results': content = renderWaitingForResultsHTML(); break;
           case 'leaderboard': content = renderLeaderboardHTML(); break;
         }
@@ -1119,6 +1163,34 @@
       `;
     }
 
+    function renderWaitingForNextQuestionHTML() {
+      const p = state.currentParticipant;
+      const quiz = state.selectedQuiz || state.quizzes[0];
+      const answeredCount = state.participants.filter(pt =>
+        pt.quizCode === quiz.code && pt.status !== 'disqualified' &&
+        (pt.answers || []).some(answer => answer.questionId === quiz.questions[state.currentQuestionIndex].id)
+      ).length;
+      const totalCount = state.participants.filter(pt => pt.quizCode === quiz.code && pt.status !== 'disqualified').length;
+
+      return `
+        <div class="battle-card battle-card-sm text-center">
+          <div class="pulse-indicator-wrapper" style="margin: 0 auto 16px;">
+            <div class="pulse-ring-outer"></div>
+            <div class="pulse-ring-inner">${icon('users', 'icon-lg')}</div>
+          </div>
+          <span class="badge-live" style="margin-bottom:8px;">QUESTION COMPLETE</span>
+          <h2 style="font-size:24px; margin-top:6px; margin-bottom:6px;">Waiting for the other students</h2>
+          <p class="text-secondary" style="font-size:13px; margin-bottom:20px;">
+            ${p?.name || 'Your'} answer is recorded. The next question will open when everyone answers or their timer finishes.
+          </p>
+          <div class="notice-box notice-box-cyan" style="text-align:left; margin-bottom:0;">
+            <span class="notice-icon">${icon('clock', 'icon-md')}</span>
+            <div><strong>${answeredCount} of ${totalCount}</strong> students have answered this question.</div>
+          </div>
+        </div>
+      `;
+    }
+
     // =========================================================================
     // VICTORY PODIUM & ANIMATED TROPHY PROGRESS BAR LEADERBOARD
     // =========================================================================
@@ -1295,7 +1367,7 @@
 
           <div style="margin-top: 32px; display:flex; justify-content:center; gap:12px;">
             <button class="btn btn-primary" id="btn-play-again">
-              Play Another Battle
+              Join Another Quiz
             </button>
           </div>
         </div>
@@ -2268,11 +2340,15 @@
       });
 
       document.getElementById('btn-return-lobby')?.addEventListener('click', () => {
+        clearIntervalTimer();
+        state.currentParticipant = null;
         state.studentStep = 'code_portal';
         renderApp();
       });
 
       document.getElementById('btn-play-again')?.addEventListener('click', () => {
+        clearIntervalTimer();
+        state.currentParticipant = null;
         state.studentStep = 'code_portal';
         renderApp();
       });
