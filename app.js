@@ -1067,6 +1067,10 @@
               `).join('')}
             </div>
           </div>
+
+          <button class="btn btn-secondary btn-block" id="btn-leave-waiting-room" style="margin-top:20px;">
+            Leave Quiz
+          </button>
         </div>
       `;
     }
@@ -2397,6 +2401,14 @@
       });
 
       document.getElementById('btn-return-lobby')?.addEventListener('click', () => {
+        clearIntervalTimer();
+        state.currentParticipant = null;
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+        state.studentStep = 'code_portal';
+        renderApp();
+      });
+
+      document.getElementById('btn-leave-waiting-room')?.addEventListener('click', () => {
         clearIntervalTimer();
         state.currentParticipant = null;
         localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
