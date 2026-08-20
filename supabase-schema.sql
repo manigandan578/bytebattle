@@ -10,9 +10,12 @@ create table if not exists public.quizzes (
   speed_bonus_enabled boolean not null default true,
   status text not null default 'lobby',
   current_question_index integer not null default 0,
+  question_started_at bigint,
   created_at bigint not null,
   questions jsonb not null default '[]'::jsonb
 );
+
+alter table public.quizzes add column if not exists question_started_at bigint;
 
 create table if not exists public.participants (
   id text primary key,

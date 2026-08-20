@@ -48,6 +48,7 @@
         speedBonusEnabled: true,
         status: 'lobby',
         currentQuestionIndex: 0,
+        questionStartedAt: null,
         createdAt: Date.now() - 3600000,
         questions: [
           {
@@ -116,6 +117,7 @@
         speedBonusEnabled: true,
         status: 'draft',
         currentQuestionIndex: 0,
+        questionStartedAt: null,
         createdAt: Date.now() - 7200000,
         questions: [
           {
@@ -166,6 +168,7 @@
         speed_bonus_enabled: quiz.speedBonusEnabled !== false,
         status: quiz.status || 'lobby',
         current_question_index: quiz.currentQuestionIndex || 0,
+        question_started_at: quiz.questionStartedAt || null,
         created_at: quiz.createdAt || Date.now(),
         questions: quiz.questions || []
       };
@@ -183,6 +186,7 @@
         speedBonusEnabled: row.speed_bonus_enabled,
         status: row.status,
         currentQuestionIndex: row.current_question_index,
+        questionStartedAt: row.question_started_at || null,
         createdAt: row.created_at,
         questions: row.questions || []
       };
@@ -448,6 +452,7 @@
       questionReadyForNext: false,
       secondsRemaining: 20,
       questionTimerInterval: null,
+      adminQuizTimerInterval: null,
       adminView: 'quizzes_list',
       scoreboardReturnView: 'quiz_inside_manage',
       scoreboardDisplayMode: 'live_table',
@@ -633,6 +638,11 @@
       if (!joinedQuiz) return false;
       state.selectedQuiz = joinedQuiz;
 
+      if (joinedQuiz.status === 'active' && joinedQuiz.currentQuestionIndex !== state.currentQuestionIndex && state.studentStep === 'active_quiz') {
+        advanceStudentToQuestion(joinedQuiz.currentQuestionIndex);
+        return true;
+      }
+
       if (joinedQuiz.status === 'lobby' && ['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'leaderboard'].includes(state.studentStep)) {
         clearIntervalTimer();
         state.studentStep = 'waiting_room';
@@ -660,6 +670,74 @@
         clearInterval(state.questionTimerInterval);
         state.questionTimerInterval = null;
       }
+    }
+
+    function getSharedSecondsRemaining(quiz) {
+      if (!quiz || !quiz.questionStartedAt) return quiz?.timerPerQuestion || 20;
+      return Math.max(0, Math.ceil(((quiz.questionStartedAt + ((quiz.timerPerQuestion || 20) * 1000)) - Date.now()) / 1000));
+    }
+
+    function clearAdminQuizTimer() {
+      if (state.adminQuizTimerInterval !== null) {
+        clearInterval(state.adminQuizTimerInterval);
+        state.adminQuizTimerInterval = null;
+      }
+    }
+
+    function updateAdminQuizClockDOM() {
+      const quiz = getManagingQuiz();
+      if (!quiz || quiz.status !== 'active') return;
+      const seconds = getSharedSecondsRemaining(quiz);
+      const digits = document.getElementById('admin-live-timer-digits');
+      const fill = document.getElementById('admin-live-timer-fill');
+      const questionNumber = document.getElementById('admin-live-question-number');
+      if (digits) digits.textContent = `${seconds}s`;
+      if (fill) fill.style.width = `${Math.max(0, (seconds / (quiz.timerPerQuestion || 20)) * 100)}%`;
+      if (questionNumber) questionNumber.textContent = `Question ${quiz.currentQuestionIndex + 1} of ${quiz.questions.length}`;
+    }
+
+    function advanceQuizFromAdmin(quiz) {
+      if (!quiz || quiz.status !== 'active') return;
+      const nextIndex = quiz.currentQuestionIndex + 1;
+      if (nextIndex >= quiz.questions.length) {
+        clearAdminQuizTimer();
+        quiz.questionStartedAt = null;
+        state.quizzes = state.quizzes.map(item => item.id === quiz.id ? quiz : item);
+        saveQuizzes(state.quizzes);
+        renderApp();
+        return;
+      }
+
+      quiz.currentQuestionIndex = nextIndex;
+      quiz.questionStartedAt = Date.now();
+      state.quizzes = state.quizzes.map(item => item.id === quiz.id ? quiz : item);
+      saveQuizzes(state.quizzes);
+      broadcastMessage('QUESTION_ADVANCE', {
+        quizCode: quiz.code,
+        questionIndex: nextIndex,
+        questionStartedAt: quiz.questionStartedAt
+      });
+      renderApp();
+    }
+
+    function startAdminQuizTimer() {
+      clearAdminQuizTimer();
+      const activeQuiz = getManagingQuiz();
+      if (activeQuiz?.status === 'active' && !activeQuiz.questionStartedAt) {
+        activeQuiz.questionStartedAt = Date.now();
+        state.quizzes = state.quizzes.map(item => item.id === activeQuiz.id ? activeQuiz : item);
+        saveQuizzes(state.quizzes);
+      }
+      state.adminQuizTimerInterval = window.setInterval(() => {
+        const quiz = getManagingQuiz();
+        if (!quiz || quiz.status !== 'active') {
+          clearAdminQuizTimer();
+          return;
+        }
+        updateAdminQuizClockDOM();
+        if (getSharedSecondsRemaining(quiz) <= 0) advanceQuizFromAdmin(quiz);
+      }, 250);
+      updateAdminQuizClockDOM();
     }
 
     function showFullscreenWarning(message) {
@@ -835,18 +913,13 @@
       const quiz = state.selectedQuiz;
       if (!quiz) return;
 
-      state.secondsRemaining = quiz.timerPerQuestion || 20;
+      state.secondsRemaining = getSharedSecondsRemaining(quiz);
       state.questionTimerInterval = window.setInterval(() => {
-        state.secondsRemaining -= 1;
+        state.secondsRemaining = getSharedSecondsRemaining(state.selectedQuiz);
         updateTimerDOM();
 
         if (state.secondsRemaining <= 0) {
           clearIntervalTimer();
-          if (isCurrentQuestionAnswered()) {
-            moveToNextQuestionAfterTimeout();
-          } else {
-            handleOptionSubmit(true);
-          }
         }
       }, 1000);
     }
@@ -879,7 +952,6 @@
       if (!quiz || !state.currentParticipant) return;
 
       if (!isAuto && state.questionReadyForNext) {
-        advanceStudentToQuestion(state.currentQuestionIndex + 1);
         return;
       }
       if (isCurrentQuestionAnswered()) return;
@@ -1013,12 +1085,14 @@
       if (!targetQuiz) return;
       targetQuiz.status = 'active';
       targetQuiz.currentQuestionIndex = 0;
+      targetQuiz.questionStartedAt = Date.now();
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
       state.selectedQuiz = targetQuiz;
       state.activeQuizCode = targetQuiz.code;
       localStorage.setItem(STORAGE_KEYS.ACTIVE_CODE, targetQuiz.code);
       broadcastMessage('START_QUIZ', { quizCode: targetQuiz.code });
+      startAdminQuizTimer();
       renderApp();
     }
 
@@ -1027,8 +1101,10 @@
       if (!targetQuiz) return;
 
       targetQuiz.status = 'lobby';
+      targetQuiz.questionStartedAt = null;
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
+      clearAdminQuizTimer();
       state.participants = state.participants.map(participant => participant.quizCode === targetQuiz.code
         ? { ...participant, status: 'waiting' }
         : participant);
@@ -1058,8 +1134,10 @@
       if (!targetQuiz) return;
       targetQuiz.status = 'lobby';
       targetQuiz.currentQuestionIndex = 0;
+      targetQuiz.questionStartedAt = null;
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
+      clearAdminQuizTimer();
 
       state.participants = state.participants.filter(p => p.quizCode !== targetQuiz.code);
   localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
@@ -1123,6 +1201,12 @@
       `;
 
       attachEventListeners();
+      const managingQuiz = getManagingQuiz();
+      if (state.currentView === 'admin' && state.isAdminLoggedIn && managingQuiz?.status === 'active') {
+        if (state.adminQuizTimerInterval === null) startAdminQuizTimer();
+      } else if (state.adminQuizTimerInterval !== null) {
+        clearAdminQuizTimer();
+      }
     }
 
     function renderHeaderHTML() {
@@ -1979,6 +2063,19 @@
             </div>
           </div>
 
+          <div class="admin-live-question-panel" style="margin-bottom:24px;">
+            <div>
+              <span class="text-cyan font-mono" style="font-size:11px; font-weight:800; text-transform:uppercase;">Shared Live Question</span>
+              <h3 id="admin-live-question-number" style="font-size:18px; margin-top:4px;">Question ${quiz.currentQuestionIndex + 1} of ${quiz.questions.length}</h3>
+              <p class="text-secondary" style="font-size:13px; margin-top:6px;">${quiz.questions[quiz.currentQuestionIndex]?.questionText || 'Waiting for the quiz to start.'}</p>
+            </div>
+            <div class="admin-live-timer" aria-live="polite">
+              <span class="text-muted" style="font-size:10px; font-weight:800; letter-spacing:0.08em;">TIME REMAINING</span>
+              <strong id="admin-live-timer-digits" class="countdown-digits">${quiz.status === 'active' ? getSharedSecondsRemaining(quiz) : quiz.timerPerQuestion}s</strong>
+              <div class="progress-track" style="width:180px; margin-top:6px;"><div id="admin-live-timer-fill" class="progress-fill" style="width:${quiz.status === 'active' ? Math.max(0, (getSharedSecondsRemaining(quiz) / (quiz.timerPerQuestion || 20)) * 100) : 100}%;"></div></div>
+            </div>
+          </div>
+
           <!-- EMBEDDED REAL-TIME SCOREBOARD SECTION INSIDE THIS QUIZ -->
           <div style="margin-bottom:32px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
@@ -2149,6 +2246,19 @@
               <button class="btn btn-secondary btn-sm" id="btn-scoreboard-reset-session" data-id="${quiz.id}">
                 ${icon('refresh', 'icon-sm')} Reset Lobby
               </button>
+            </div>
+          </div>
+
+          <div class="admin-live-question-panel" style="margin-bottom:24px;">
+            <div>
+              <span class="text-cyan font-mono" style="font-size:11px; font-weight:800; text-transform:uppercase;">Shared Live Question</span>
+              <h3 id="admin-live-question-number" style="font-size:18px; margin-top:4px;">Question ${quiz.currentQuestionIndex + 1} of ${quiz.questions.length}</h3>
+              <p class="text-secondary" style="font-size:13px; margin-top:6px;">${quiz.questions[quiz.currentQuestionIndex]?.questionText || 'Waiting for the quiz to start.'}</p>
+            </div>
+            <div class="admin-live-timer" aria-live="polite">
+              <span class="text-muted" style="font-size:10px; font-weight:800; letter-spacing:0.08em;">TIME REMAINING</span>
+              <strong id="admin-live-timer-digits" class="countdown-digits">${quiz.status === 'active' ? getSharedSecondsRemaining(quiz) : quiz.timerPerQuestion}s</strong>
+              <div class="progress-track" style="width:180px; margin-top:6px;"><div id="admin-live-timer-fill" class="progress-fill" style="width:${quiz.status === 'active' ? Math.max(0, (getSharedSecondsRemaining(quiz) / (quiz.timerPerQuestion || 20)) * 100) : 100}%;"></div></div>
             </div>
           </div>
 
@@ -3085,6 +3195,7 @@
           speedBonusEnabled: true,
           status: 'lobby',
           currentQuestionIndex: 0,
+          questionStartedAt: null,
           createdAt: Date.now(),
           questions: state.newQuestions
         };
