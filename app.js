@@ -359,7 +359,13 @@
             }
           } else if (changedParticipant) {
             state.participants = [changedParticipant, ...state.participants.filter(p => p.id !== changedParticipant.id)];
-            if (state.currentParticipant?.id === changedParticipant.id) state.currentParticipant = changedParticipant;
+            if (state.currentParticipant?.id === changedParticipant.id) {
+              state.currentParticipant = changedParticipant;
+              if (changedParticipant.status === 'disqualified') {
+                clearIntervalTimer();
+                state.studentStep = 'disqualified';
+              }
+            }
           }
           localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
           syncStudentQuizState();
@@ -497,7 +503,9 @@
     if (state.currentParticipant) {
       state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode) || state.selectedQuiz;
       state.activeQuizCode = state.selectedQuiz?.code || state.activeQuizCode;
-      if (state.selectedQuiz?.status === 'active') {
+      if (state.currentParticipant.status === 'disqualified') {
+        state.studentStep = 'disqualified';
+      } else if (state.selectedQuiz?.status === 'active') {
         state.studentStep = 'active_quiz';
         state.currentQuestionIndex = Math.min(
           state.currentParticipant.answers?.length || 0,
@@ -539,6 +547,12 @@
     document.addEventListener('webkitfullscreenchange', handleFullscreenExitDetection);
     document.addEventListener('mozfullscreenchange', handleFullscreenExitDetection);
     document.addEventListener('MSFullscreenChange', handleFullscreenExitDetection);
+
+    document.addEventListener('pointerdown', () => {
+      if (state.currentView === 'student' && state.studentStep === 'active_quiz') {
+        requestFullscreenForCurrentStudent();
+      }
+    }, { passive: true });
 
     // Multi-Tab Sync listener
     if (syncChannel) {
@@ -617,6 +631,14 @@
         return;
       }
 
+      if (data.type === 'PARTICIPANT_DISQUALIFIED' && data.payload?.id === state.currentParticipant?.id) {
+        clearIntervalTimer();
+        state.currentParticipant = data.payload;
+        state.studentStep = 'disqualified';
+        renderApp();
+        return;
+      }
+
       if (data.type === 'SHOW_RESULTS') {
         if (data.payload?.quizCode === state.selectedQuiz?.code) {
           if (['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'waiting_room'].includes(state.studentStep)) {
@@ -650,6 +672,17 @@
       const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
       if (!joinedQuiz) return false;
       state.selectedQuiz = joinedQuiz;
+
+      const latestParticipant = state.participants.find(participant => participant.id === state.currentParticipant.id);
+      if (latestParticipant?.status === 'disqualified' || state.currentParticipant.status === 'disqualified') {
+        state.currentParticipant = latestParticipant || state.currentParticipant;
+        clearIntervalTimer();
+        if (state.studentStep !== 'disqualified') {
+          state.studentStep = 'disqualified';
+          renderApp();
+        }
+        return true;
+      }
 
       if (joinedQuiz.status === 'lobby' && ['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'leaderboard'].includes(state.studentStep)) {
         clearIntervalTimer();
@@ -731,8 +764,9 @@
       const isFullscreen = !!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement;
 
       if (isActiveQuiz && !isFullscreen) {
-        showFullscreenWarning('Warning: You exited fullscreen. You have been disqualified from this live quiz.');
+        state.fullscreenWarningMessage = 'You exited fullscreen. This quiz is now disabled for your account.';
         disqualifyCurrentParticipant('Fullscreen exited during live battle');
+        alert('Warning: You exited fullscreen. You have been disqualified from this live quiz.');
       }
     }
 
@@ -1460,6 +1494,12 @@
       const p = state.currentParticipant;
       return `
         <div class="battle-card battle-card-sm text-center" style="border-color: rgba(239,68,68,0.5);">
+          ${state.fullscreenWarningMessage ? `
+            <div class="notice-box notice-box-red" style="text-align:left; margin-bottom:16px;">
+              <span class="notice-icon">${icon('alertTriangle', 'icon-md')}</span>
+              <div><strong>Fullscreen Warning</strong><p style="margin-top:2px; font-size:12px;">${state.fullscreenWarningMessage}</p></div>
+            </div>
+          ` : ''}
           <div style="margin-bottom: 12px;">
             ${icon('alertTriangle', 'icon-2xl text-red')}
           </div>
@@ -1859,7 +1899,7 @@
       const quiz = getManagingQuiz();
       if (!quiz) return renderAdminQuizzesListView();
 
-      const list = [...state.participants.filter(p => p.quizCode === quiz.code)].sort((a, b) => (b.score || 0) - (a.score || 0) || (a.totalTimeTakenSeconds || 0) - (b.totalTimeTakenSeconds || 0));
+      const list = [...state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified')].sort((a, b) => (b.score || 0) - (a.score || 0) || (a.totalTimeTakenSeconds || 0) - (b.totalTimeTakenSeconds || 0));
       const isQuizActive = quiz.status === 'active';
 
       return `
