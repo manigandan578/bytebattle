@@ -260,6 +260,12 @@
       }
     }
 
+    async function deleteParticipantsForQuiz(quizCode) {
+      if (!supabaseClient) return;
+      const { error } = await supabaseClient.from('participants').delete().eq('quiz_code', quizCode);
+      if (error) console.error('Supabase participant reset failed:', error.message);
+    }
+
     // BroadcastChannel Sync
     let syncChannel = null;
     try {
@@ -590,7 +596,10 @@
       if (data.type === 'RESET_SESSION') {
         if (data.payload?.quizCode === state.selectedQuiz?.code) {
           clearIntervalTimer();
-          state.studentStep = 'waiting_room';
+          state.currentParticipant = null;
+          localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+          state.selectedQuiz = state.quizzes.find(q => q.code === data.payload.quizCode) || state.selectedQuiz;
+          state.studentStep = 'code_portal';
           renderApp();
           return;
         }
@@ -611,6 +620,13 @@
         return true;
       }
 
+      if (joinedQuiz.status !== 'lobby' && ['code_portal', 'registration'].includes(state.studentStep)) {
+        state.selectedQuiz = null;
+        state.studentStep = 'code_portal';
+        renderApp();
+        return true;
+      }
+
       return false;
     }
 
@@ -628,6 +644,12 @@
         alert(`Quiz code "${clean}" is invalid or does not exist. Please obtain the correct code from your competition administrator.`);
         return;
       }
+      if (matched.status !== 'lobby') {
+        alert(matched.status === 'active'
+          ? 'This quiz has already started. New students cannot join now.'
+          : 'This quiz is closed. Please ask the administrator for another quiz code.');
+        return;
+      }
       state.selectedQuiz = matched;
       state.activeQuizCode = matched.code;
       localStorage.setItem(STORAGE_KEYS.ACTIVE_CODE, matched.code);
@@ -638,6 +660,13 @@
     function handleRegistrationSubmit(name, college, department) {
       if (!name.trim() || !college.trim() || !department.trim()) {
         alert('Please fill out all registration fields.');
+        return;
+      }
+
+      if (!state.selectedQuiz || state.selectedQuiz.status !== 'lobby') {
+        alert('This quiz has already started or is closed. Please enter a different quiz code.');
+        state.studentStep = 'code_portal';
+        renderApp();
         return;
       }
 
@@ -663,16 +692,8 @@
       saveParticipants(updated);
       broadcastMessage('PARTICIPANT_JOINED', participant);
 
-      if (state.selectedQuiz?.status === 'active') {
-        startQuizForStudent();
-      } else if (state.selectedQuiz?.status === 'results_revealed') {
-        state.studentStep = 'leaderboard';
-        renderApp();
-        setTimeout(() => triggerConfetti(), 300);
-      } else {
-        state.studentStep = 'waiting_room';
-        renderApp();
-      }
+      state.studentStep = 'waiting_room';
+      renderApp();
     }
 
     function startQuizForStudent() {
@@ -948,22 +969,9 @@
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
 
-      state.participants = state.participants.map(p => {
-        if (p.quizCode === targetQuiz.code) {
-          return {
-            ...p,
-            status: 'waiting',
-            score: 0,
-            correctCount: 0,
-            totalTimeTakenSeconds: 0,
-            answers: [],
-            disqualificationReason: undefined,
-            disqualifiedAt: undefined
-          };
-        }
-        return p;
-      });
+      state.participants = state.participants.filter(p => p.quizCode !== targetQuiz.code);
       saveParticipants(state.participants);
+      deleteParticipantsForQuiz(targetQuiz.code);
       broadcastMessage('RESET_SESSION', { quizCode: targetQuiz.code });
       renderApp();
     }
