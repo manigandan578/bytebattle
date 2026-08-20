@@ -146,6 +146,84 @@
       CURRENT_USER_ID: 'byte_battle_user_id_v5'
     };
 
+    const supabaseClient = window.supabase &&
+      window.BYTE_BATTLE_SUPABASE_URL &&
+      window.BYTE_BATTLE_SUPABASE_ANON_KEY &&
+      !window.BYTE_BATTLE_SUPABASE_URL.includes('YOUR-PROJECT-REF') &&
+      !window.BYTE_BATTLE_SUPABASE_ANON_KEY.includes('YOUR-SUPABASE-ANON-KEY')
+      ? window.supabase.createClient(window.BYTE_BATTLE_SUPABASE_URL, window.BYTE_BATTLE_SUPABASE_ANON_KEY)
+      : null;
+
+    function quizToRow(quiz) {
+      return {
+        id: quiz.id,
+        code: quiz.code,
+        title: quiz.title,
+        description: quiz.description || '',
+        category: quiz.category || 'General Engineering',
+        timer_per_question: quiz.timerPerQuestion || 20,
+        points_per_question: quiz.pointsPerQuestion || 100,
+        speed_bonus_enabled: quiz.speedBonusEnabled !== false,
+        status: quiz.status || 'lobby',
+        current_question_index: quiz.currentQuestionIndex || 0,
+        created_at: quiz.createdAt || Date.now(),
+        questions: quiz.questions || []
+      };
+    }
+
+    function rowToQuiz(row) {
+      return {
+        id: row.id,
+        code: row.code,
+        title: row.title,
+        description: row.description,
+        category: row.category,
+        timerPerQuestion: row.timer_per_question,
+        pointsPerQuestion: row.points_per_question,
+        speedBonusEnabled: row.speed_bonus_enabled,
+        status: row.status,
+        currentQuestionIndex: row.current_question_index,
+        createdAt: row.created_at,
+        questions: row.questions || []
+      };
+    }
+
+    function participantToRow(participant) {
+      return {
+        id: participant.id,
+        quiz_code: participant.quizCode,
+        name: participant.name,
+        college_name: participant.collegeName || '',
+        department: participant.department || '',
+        joined_at: participant.joinedAt || Date.now(),
+        status: participant.status || 'waiting',
+        score: participant.score || 0,
+        correct_count: participant.correctCount || 0,
+        total_time_taken_seconds: participant.totalTimeTakenSeconds || 0,
+        answers: participant.answers || [],
+        disqualification_reason: participant.disqualificationReason || null,
+        disqualified_at: participant.disqualifiedAt || null
+      };
+    }
+
+    function rowToParticipant(row) {
+      return {
+        id: row.id,
+        quizCode: row.quiz_code,
+        name: row.name,
+        collegeName: row.college_name,
+        department: row.department,
+        joinedAt: row.joined_at,
+        status: row.status,
+        score: row.score,
+        correctCount: row.correct_count,
+        totalTimeTakenSeconds: row.total_time_taken_seconds,
+        answers: row.answers || [],
+        disqualificationReason: row.disqualification_reason || undefined,
+        disqualifiedAt: row.disqualified_at || undefined
+      };
+    }
+
     function loadQuizzes() {
       try {
         const raw = localStorage.getItem(STORAGE_KEYS.QUIZZES);
@@ -158,6 +236,11 @@
     function saveQuizzes(quizzes) {
       localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(quizzes));
       broadcastMessage('QUIZZES_UPDATED');
+      if (supabaseClient) {
+        supabaseClient.from('quizzes').upsert(quizzes.map(quizToRow)).then(({ error }) => {
+          if (error) console.error('Supabase quiz sync failed:', error.message);
+        });
+      }
     }
 
     function loadParticipants() {
@@ -170,6 +253,11 @@
 
     function saveParticipants(participants) {
       localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(participants));
+      if (supabaseClient) {
+        supabaseClient.from('participants').upsert(participants.map(participantToRow)).then(({ error }) => {
+          if (error) console.error('Supabase participant sync failed:', error.message);
+        });
+      }
     }
 
     // BroadcastChannel Sync
@@ -184,6 +272,65 @@
           syncChannel.postMessage({ type, payload, timestamp: Date.now() });
         } catch (e) {}
       }
+    }
+
+    async function initializeSupabaseSync() {
+      if (!supabaseClient) return;
+
+      const [{ data: remoteQuizzes, error: quizError }, { data: remoteParticipants, error: participantError }] = await Promise.all([
+        supabaseClient.from('quizzes').select('*').order('created_at', { ascending: false }),
+        supabaseClient.from('participants').select('*').order('joined_at', { ascending: true })
+      ]);
+
+      if (quizError || participantError) {
+        console.error('Supabase connection failed:', quizError?.message || participantError?.message);
+        return;
+      }
+
+      if (remoteQuizzes?.length) {
+        state.quizzes = remoteQuizzes.map(rowToQuiz);
+        localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(state.quizzes));
+      } else {
+        await supabaseClient.from('quizzes').upsert(state.quizzes.map(quizToRow));
+      }
+
+      if (remoteParticipants?.length) {
+        state.participants = remoteParticipants.map(rowToParticipant);
+        localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
+      }
+
+      state.activeQuizCode = localStorage.getItem(STORAGE_KEYS.ACTIVE_CODE) || state.quizzes[0]?.code || 'BB-8942';
+      state.selectedQuiz = state.quizzes.find(q => q.code === state.activeQuizCode) || state.quizzes[0];
+      if (state.currentParticipant) {
+        state.currentParticipant = state.participants.find(p => p.id === state.currentParticipant.id) || state.currentParticipant;
+        state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode) || state.selectedQuiz;
+      }
+      renderApp();
+
+      supabaseClient.channel('byte-battle-live')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'quizzes' }, (payload) => {
+          const changedQuiz = payload.new ? rowToQuiz(payload.new) : null;
+          if (payload.eventType === 'DELETE') {
+            state.quizzes = state.quizzes.filter(q => q.id !== payload.old.id);
+          } else if (changedQuiz) {
+            state.quizzes = [changedQuiz, ...state.quizzes.filter(q => q.id !== changedQuiz.id)];
+          }
+          localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(state.quizzes));
+          state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant?.quizCode) || state.selectedQuiz;
+          renderApp();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'participants' }, (payload) => {
+          const changedParticipant = payload.new ? rowToParticipant(payload.new) : null;
+          if (payload.eventType === 'DELETE') {
+            state.participants = state.participants.filter(p => p.id !== payload.old.id);
+          } else if (changedParticipant) {
+            state.participants = [changedParticipant, ...state.participants.filter(p => p.id !== changedParticipant.id)];
+            if (state.currentParticipant?.id === changedParticipant.id) state.currentParticipant = changedParticipant;
+          }
+          localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
+          renderApp();
+        })
+        .subscribe();
     }
 
     // Confetti Engine
@@ -2846,4 +2993,5 @@
     if (state.currentView === 'student' && state.studentStep === 'active_quiz') {
       startQuestionTimer();
     }
+    initializeSupabaseSync();
 
