@@ -10,7 +10,6 @@ create table if not exists public.quizzes (
   speed_bonus_enabled boolean not null default true,
   status text not null default 'lobby',
   current_question_index integer not null default 0,
-  session_id text,
   created_at bigint not null,
   questions jsonb not null default '[]'::jsonb
 );
@@ -18,7 +17,6 @@ create table if not exists public.quizzes (
 create table if not exists public.participants (
   id text primary key,
   quiz_code text not null references public.quizzes(code) on update cascade on delete cascade,
-  session_id text,
   name text not null,
   college_name text,
   department text,
@@ -34,10 +32,6 @@ create table if not exists public.participants (
 
 alter table public.quizzes enable row level security;
 alter table public.participants enable row level security;
-
--- Run these two statements separately if the tables already existed before session support was added.
-alter table public.quizzes add column if not exists session_id text;
-alter table public.participants add column if not exists session_id text;
 
 create policy "Public can read quizzes" on public.quizzes for select to anon using (true);
 create policy "Public can create quizzes" on public.quizzes for insert to anon with check (true);

@@ -166,7 +166,6 @@
         speed_bonus_enabled: quiz.speedBonusEnabled !== false,
         status: quiz.status || 'lobby',
         current_question_index: quiz.currentQuestionIndex || 0,
-        session_id: quiz.sessionId || null,
         created_at: quiz.createdAt || Date.now(),
         questions: quiz.questions || []
       };
@@ -184,7 +183,6 @@
         speedBonusEnabled: row.speed_bonus_enabled,
         status: row.status,
         currentQuestionIndex: row.current_question_index,
-        sessionId: row.session_id || null,
         createdAt: row.created_at,
         questions: row.questions || []
       };
@@ -194,7 +192,6 @@
       return {
         id: participant.id,
         quiz_code: participant.quizCode,
-        session_id: participant.sessionId || null,
         name: participant.name,
         college_name: participant.collegeName || '',
         department: participant.department || '',
@@ -213,7 +210,6 @@
       return {
         id: row.id,
         quizCode: row.quiz_code,
-        sessionId: row.session_id || null,
         name: row.name,
         collegeName: row.college_name,
         department: row.department,
@@ -262,14 +258,6 @@
           if (error) console.error('Supabase participant sync failed:', error.message);
         });
       }
-    }
-
-    function getQuizParticipants(quiz) {
-      if (!quiz) return [];
-      return state.participants.filter(participant =>
-        participant.quizCode === quiz.code &&
-        (!quiz.sessionId || participant.sessionId === quiz.sessionId)
-      );
     }
 
     // BroadcastChannel Sync
@@ -616,24 +604,7 @@
 
       const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
       if (!joinedQuiz) return false;
-
-      if (joinedQuiz.sessionId && state.currentParticipant.sessionId !== joinedQuiz.sessionId) {
-        clearIntervalTimer();
-        state.currentParticipant = null;
-        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
-        state.studentStep = 'code_portal';
-        renderApp();
-        return true;
-      }
       state.selectedQuiz = joinedQuiz;
-
-      if (joinedQuiz.status === 'active' &&
-        Number.isInteger(joinedQuiz.currentQuestionIndex) &&
-        joinedQuiz.currentQuestionIndex > state.currentQuestionIndex &&
-        state.studentStep === 'active_quiz') {
-        advanceStudentToQuestion(joinedQuiz.currentQuestionIndex);
-        return true;
-      }
 
       if (joinedQuiz.status === 'active' && ['registration', 'waiting_room'].includes(state.studentStep)) {
         startQuizForStudent();
@@ -657,10 +628,6 @@
         alert(`Quiz code "${clean}" is invalid or does not exist. Please obtain the correct code from your competition administrator.`);
         return;
       }
-      if (matched.status === 'active') {
-        alert('This quiz has already started. New participants cannot join now.');
-        return;
-      }
       state.selectedQuiz = matched;
       state.activeQuizCode = matched.code;
       localStorage.setItem(STORAGE_KEYS.ACTIVE_CODE, matched.code);
@@ -674,21 +641,12 @@
         return;
       }
 
-      const latestQuiz = state.quizzes.find(q => q.id === state.selectedQuiz?.id);
-      if (!latestQuiz || latestQuiz.status === 'active') {
-        alert('This quiz has already started. New participants cannot join now.');
-        state.studentStep = 'code_portal';
-        renderApp();
-        return;
-      }
-
       const participant = {
         id: `p-${Date.now()}`,
         name: name.trim(),
         collegeName: college.trim(),
         department: department.trim(),
         quizCode: state.selectedQuiz?.code || 'BB-8942',
-        sessionId: latestQuiz.sessionId || null,
         joinedAt: Date.now(),
         status: 'waiting',
         score: 0,
@@ -752,7 +710,7 @@
       const quiz = state.selectedQuiz;
       if (!quiz || state.studentStep !== 'active_quiz' || !isCurrentQuestionAnswered()) return false;
 
-      const quizParticipants = getQuizParticipants(quiz).filter(p => p.status !== 'disqualified');
+      const quizParticipants = state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified');
       const currentQuestion = quiz.questions[state.currentQuestionIndex];
       const everyoneAnswered = quizParticipants.length > 0 && quizParticipants.every(participant =>
         (participant.answers || []).some(answer => answer.questionId === currentQuestion.id)
@@ -818,7 +776,7 @@
       if (!quiz || !state.currentParticipant) return;
 
       if (!isAuto && state.questionReadyForNext) {
-        moveToNextQuestionAfterTimeout();
+        advanceStudentToQuestion(state.currentQuestionIndex + 1);
         return;
       }
       if (isCurrentQuestionAnswered()) return;
@@ -890,9 +848,6 @@
       const nextQuestionIndex = state.currentQuestionIndex + 1;
       if (nextQuestionIndex >= quiz.questions.length) return;
 
-      quiz.currentQuestionIndex = nextQuestionIndex;
-      state.quizzes = state.quizzes.map(item => item.id === quiz.id ? quiz : item);
-      saveQuizzes(state.quizzes);
       broadcastMessage('QUESTION_ADVANCE', { quizCode: quiz.code, questionIndex: nextQuestionIndex });
       advanceStudentToQuestion(nextQuestionIndex);
     }
@@ -953,18 +908,8 @@
     function startQuizInside(quizId) {
       const targetQuiz = state.quizzes.find(q => q.id === quizId);
       if (!targetQuiz) return;
-      const newSessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const previousParticipants = state.participants.filter(p => p.quizCode === targetQuiz.code);
-      state.participants = state.participants.filter(p => p.quizCode !== targetQuiz.code);
-      saveParticipants(state.participants);
-      if (supabaseClient && previousParticipants.length) {
-        supabaseClient.from('participants').delete().eq('quiz_code', targetQuiz.code).then(({ error }) => {
-          if (error) console.error('Supabase old session cleanup failed:', error.message);
-        });
-      }
       targetQuiz.status = 'active';
       targetQuiz.currentQuestionIndex = 0;
-      targetQuiz.sessionId = newSessionId;
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
       state.selectedQuiz = targetQuiz;
@@ -1003,13 +948,22 @@
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
 
-      state.participants = state.participants.filter(p => p.quizCode !== targetQuiz.code);
+      state.participants = state.participants.map(p => {
+        if (p.quizCode === targetQuiz.code) {
+          return {
+            ...p,
+            status: 'waiting',
+            score: 0,
+            correctCount: 0,
+            totalTimeTakenSeconds: 0,
+            answers: [],
+            disqualificationReason: undefined,
+            disqualifiedAt: undefined
+          };
+        }
+        return p;
+      });
       saveParticipants(state.participants);
-      if (supabaseClient) {
-        supabaseClient.from('participants').delete().eq('quiz_code', targetQuiz.code).then(({ error }) => {
-          if (error) console.error('Supabase session reset failed:', error.message);
-        });
-      }
       broadcastMessage('RESET_SESSION', { quizCode: targetQuiz.code });
       renderApp();
     }
@@ -1240,7 +1194,7 @@
     function renderWaitingRoomHTML() {
       const quiz = state.selectedQuiz || state.quizzes[0];
       const participant = state.currentParticipant;
-      const filteredParticipants = getQuizParticipants(quiz);
+      const filteredParticipants = state.participants.filter(p => p.quizCode === quiz.code);
 
       return `
         <div class="battle-card battle-card-md text-center">
@@ -1413,9 +1367,8 @@
     function renderWaitingForResultsHTML() {
       const p = state.currentParticipant;
       const quiz = state.selectedQuiz || state.quizzes[0];
-      const quizParticipants = getQuizParticipants(quiz);
-      const finishedCount = quizParticipants.filter(pt => pt.status === 'finished').length;
-      const totalCount = quizParticipants.filter(pt => pt.status !== 'disqualified').length;
+      const finishedCount = state.participants.filter(pt => pt.quizCode === quiz.code && pt.status === 'finished').length;
+      const totalCount = state.participants.filter(pt => pt.quizCode === quiz.code && pt.status !== 'disqualified').length;
 
       return `
         <div class="battle-card battle-card-sm text-center">
@@ -1465,7 +1418,7 @@
     // =========================================================================
     function renderLeaderboardHTML() {
       const quiz = state.selectedQuiz || state.quizzes[0];
-      const list = [...getQuizParticipants(quiz).filter(p => p.status !== 'disqualified')];
+      const list = [...state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified')];
       list.sort((a, b) => b.score - a.score || a.totalTimeTakenSeconds - b.totalTimeTakenSeconds);
 
       const first = list[0];
@@ -1728,7 +1681,7 @@
 
           <div class="quiz-grid">
             ${state.quizzes.map(q => {
-              const quizParticipants = getQuizParticipants(q);
+              const quizParticipants = state.participants.filter(p => p.quizCode === q.code);
               const isCurrentActive = state.activeQuizCode === q.code;
               return `
                 <div class="quiz-card-item ${isCurrentActive ? 'is-active-arena' : ''}">
@@ -1780,7 +1733,7 @@
       const quiz = getManagingQuiz();
       if (!quiz) return renderAdminQuizzesListView();
 
-      const list = getQuizParticipants(quiz);
+      const list = state.participants.filter(p => p.quizCode === quiz.code);
       const isQuizActive = quiz.status === 'active';
 
       return `
@@ -2020,11 +1973,11 @@
       const quiz = getManagingQuiz();
       if (!quiz) return renderAdminQuizzesListView();
 
-      const list = [...getQuizParticipants(quiz).filter(p => p.status !== 'disqualified')];
+      const list = [...state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified')];
       list.sort((a, b) => b.score - a.score || a.totalTimeTakenSeconds - b.totalTimeTakenSeconds);
 
-      const disqualifiedList = getQuizParticipants(quiz).filter(p => p.status === 'disqualified');
-      const allQuizPlayers = getQuizParticipants(quiz);
+      const disqualifiedList = state.participants.filter(p => p.quizCode === quiz.code && p.status === 'disqualified');
+      const allQuizPlayers = state.participants.filter(p => p.quizCode === quiz.code);
       const isQuizActive = quiz.status === 'active';
 
       const first = list[0];
