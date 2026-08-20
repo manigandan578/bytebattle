@@ -323,17 +323,25 @@
           }
           localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(state.quizzes));
           state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant?.quizCode) || state.selectedQuiz;
+          if (syncStudentQuizState()) return;
           renderApp();
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'participants' }, (payload) => {
           const changedParticipant = payload.new ? rowToParticipant(payload.new) : null;
           if (payload.eventType === 'DELETE') {
             state.participants = state.participants.filter(p => p.id !== payload.old.id);
+            if (state.currentParticipant?.id === payload.old.id) {
+              clearIntervalTimer();
+              state.currentParticipant = null;
+              localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+              state.studentStep = 'code_portal';
+            }
           } else if (changedParticipant) {
             state.participants = [changedParticipant, ...state.participants.filter(p => p.id !== changedParticipant.id)];
             if (state.currentParticipant?.id === changedParticipant.id) state.currentParticipant = changedParticipant;
           }
           localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
+          syncStudentQuizState();
           renderApp();
         })
         .subscribe();
@@ -614,6 +622,13 @@
       const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
       if (!joinedQuiz) return false;
       state.selectedQuiz = joinedQuiz;
+
+      if (joinedQuiz.status === 'lobby' && ['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'leaderboard'].includes(state.studentStep)) {
+        clearIntervalTimer();
+        state.studentStep = 'waiting_room';
+        renderApp();
+        return true;
+      }
 
       if (joinedQuiz.status === 'active' && ['registration', 'waiting_room'].includes(state.studentStep)) {
         startQuizForStudent();
@@ -947,6 +962,10 @@
       targetQuiz.status = 'lobby';
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
+      state.participants = state.participants.map(participant => participant.quizCode === targetQuiz.code
+        ? { ...participant, status: 'waiting' }
+        : participant);
+      saveParticipants(state.participants);
       broadcastMessage('STOP_QUIZ', { quizCode: targetQuiz.code });
       renderApp();
     }
@@ -961,7 +980,7 @@
       renderApp();
     }
 
-    function resetSessionInside(quizId) {
+    async function resetSessionInside(quizId) {
       const targetQuiz = state.quizzes.find(q => q.id === quizId);
       if (!targetQuiz) return;
       targetQuiz.status = 'lobby';
@@ -970,8 +989,8 @@
       saveQuizzes(state.quizzes);
 
       state.participants = state.participants.filter(p => p.quizCode !== targetQuiz.code);
-      saveParticipants(state.participants);
-      deleteParticipantsForQuiz(targetQuiz.code);
+  localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(state.participants));
+  await deleteParticipantsForQuiz(targetQuiz.code);
       broadcastMessage('RESET_SESSION', { quizCode: targetQuiz.code });
       renderApp();
     }
