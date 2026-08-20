@@ -330,6 +330,8 @@
           state.selectedQuiz = state.quizzes.find(q => q.id === state.selectedQuiz?.id) || state.selectedQuiz;
         }
 
+        if (syncStudentQuizState()) return;
+
         if (state.currentView === 'student' && ['active_quiz', 'waiting_for_results', 'waiting_room'].includes(state.studentStep) && state.selectedQuiz?.status === 'results_revealed') {
           clearIntervalTimer();
           state.studentStep = 'leaderboard';
@@ -358,6 +360,8 @@
       if (state.selectedQuiz) {
         state.selectedQuiz = state.quizzes.find(q => q.id === state.selectedQuiz?.id) || state.selectedQuiz;
       }
+
+      syncStudentQuizState();
 
       if (data.type === 'START_QUIZ' && state.studentStep === 'waiting_room') {
         if (data.payload?.quizCode === state.selectedQuiz?.code) {
@@ -388,6 +392,21 @@
       }
 
       renderApp();
+    }
+
+    function syncStudentQuizState() {
+      if (state.currentView !== 'student' || !state.currentParticipant) return false;
+
+      const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
+      if (!joinedQuiz) return false;
+      state.selectedQuiz = joinedQuiz;
+
+      if (joinedQuiz.status === 'active' && ['registration', 'waiting_room'].includes(state.studentStep)) {
+        startQuizForStudent();
+        return true;
+      }
+
+      return false;
     }
 
     function clearIntervalTimer() {
