@@ -281,6 +281,7 @@
       participants: loadParticipants(),
       currentQuestionIndex: 0,
       selectedOptionIndex: null,
+      questionReadyForNext: false,
       secondsRemaining: 20,
       questionTimerInterval: null,
       adminView: 'quizzes_list',
@@ -331,6 +332,7 @@
       state.quizzes = loadQuizzes();
       state.participants = loadParticipants();
       syncStudentQuizState();
+      refreshQuestionReadiness();
       const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
       if (!joinedQuiz) return;
 
@@ -366,6 +368,8 @@
         }
 
         if (syncStudentQuizState()) return;
+
+        refreshQuestionReadiness();
 
         if (state.currentView === 'student' && ['active_quiz', 'waiting_for_next_question', 'waiting_for_results', 'waiting_room'].includes(state.studentStep) && state.selectedQuiz?.status === 'results_revealed') {
           clearIntervalTimer();
@@ -420,10 +424,8 @@
       }
 
       if (data.type === 'PARTICIPANT_ANSWERED') {
-        if (state.studentStep === 'waiting_for_next_question') {
-          tryAdvanceQuestionForEveryone();
-          return;
-        }
+        refreshQuestionReadiness();
+        return;
       }
 
       if (data.type === 'SHOW_RESULTS') {
@@ -531,6 +533,7 @@
       state.studentStep = 'active_quiz';
       state.currentQuestionIndex = 0;
       state.selectedOptionIndex = null;
+      state.questionReadyForNext = false;
       startQuestionTimer();
       renderApp();
     }
@@ -543,13 +546,22 @@
       state.studentStep = 'active_quiz';
       state.currentQuestionIndex = questionIndex;
       state.selectedOptionIndex = null;
+      state.questionReadyForNext = false;
       startQuestionTimer();
       renderApp();
     }
 
-    function tryAdvanceQuestionForEveryone() {
+    function isCurrentQuestionAnswered() {
       const quiz = state.selectedQuiz;
-      if (!quiz || state.studentStep !== 'waiting_for_next_question') return false;
+      const participant = state.currentParticipant;
+      if (!quiz || !participant) return false;
+      const question = quiz.questions[state.currentQuestionIndex];
+      return (participant.answers || []).some(answer => answer.questionId === question.id);
+    }
+
+    function refreshQuestionReadiness(timerFinished = false) {
+      const quiz = state.selectedQuiz;
+      if (!quiz || state.studentStep !== 'active_quiz' || !isCurrentQuestionAnswered()) return false;
 
       const quizParticipants = state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified');
       const currentQuestion = quiz.questions[state.currentQuestionIndex];
@@ -557,12 +569,15 @@
         (participant.answers || []).some(answer => answer.questionId === currentQuestion.id)
       );
 
-      if (!everyoneAnswered) return false;
+      if (everyoneAnswered || timerFinished) {
+        state.questionReadyForNext = true;
+        clearIntervalTimer();
+        renderApp();
+        return true;
+      }
 
-      const nextQuestionIndex = state.currentQuestionIndex + 1;
-      broadcastMessage('QUESTION_ADVANCE', { quizCode: quiz.code, questionIndex: nextQuestionIndex });
-      advanceStudentToQuestion(nextQuestionIndex);
-      return true;
+      renderApp();
+      return false;
     }
 
     function startQuestionTimer() {
@@ -577,7 +592,11 @@
 
         if (state.secondsRemaining <= 0) {
           clearIntervalTimer();
-          handleOptionSubmit(true);
+          if (isCurrentQuestionAnswered()) {
+            refreshQuestionReadiness(true);
+          } else {
+            handleOptionSubmit(true);
+          }
         }
       }, 1000);
     }
@@ -606,9 +625,16 @@
     }
 
     function handleOptionSubmit(isAuto = false) {
-      clearIntervalTimer();
       const quiz = state.selectedQuiz;
       if (!quiz || !state.currentParticipant) return;
+
+      if (!isAuto && state.questionReadyForNext) {
+        advanceStudentToQuestion(state.currentQuestionIndex + 1);
+        return;
+      }
+      if (isCurrentQuestionAnswered()) return;
+
+      if (isAuto) clearIntervalTimer();
 
       const question = quiz.questions[state.currentQuestionIndex];
       const selectedIdx = state.selectedOptionIndex !== null ? state.selectedOptionIndex : -1;
@@ -658,9 +684,9 @@
           renderApp();
         }
       } else {
-        state.studentStep = 'waiting_for_next_question';
+        state.studentStep = 'active_quiz';
         renderApp();
-        tryAdvanceQuestionForEveryone();
+        refreshQuestionReadiness(false);
       }
     }
 
@@ -819,7 +845,6 @@
           case 'waiting_room': content = renderWaitingRoomHTML(); break;
           case 'active_quiz': content = renderActiveQuizHTML(); break;
           case 'disqualified': content = renderDisqualifiedHTML(); break;
-          case 'waiting_for_next_question': content = renderWaitingForNextQuestionHTML(); break;
           case 'waiting_for_results': content = renderWaitingForResultsHTML(); break;
           case 'leaderboard': content = renderLeaderboardHTML(); break;
         }
@@ -1083,6 +1108,8 @@
       const question = quiz.questions[qIndex];
       const totalQ = quiz.questions.length;
       const selectedIdx = state.selectedOptionIndex;
+      const answerSubmitted = isCurrentQuestionAnswered();
+      const nextQuestionReady = answerSubmitted && state.questionReadyForNext;
 
       return `
         <div class="battle-card battle-card-md">
@@ -1120,7 +1147,7 @@
               const letter = ['A', 'B', 'C', 'D'][idx];
               const isSelected = selectedIdx === idx;
               return `
-                <button class="option-btn ${isSelected ? 'selected' : ''}" data-index="${idx}">
+                <button class="option-btn ${isSelected ? 'selected' : ''}" data-index="${idx}" ${answerSubmitted ? 'disabled' : ''}>
                   <span class="option-badge">${letter}</span>
                   <span style="flex:1;">${opt}</span>
                 </button>
@@ -1132,8 +1159,8 @@
             <span class="text-muted" style="font-size:12px;">
               Keyboard: <kbd style="background:rgba(51,65,85,0.8); padding:2px 6px; border-radius:4px; font-family:var(--font-mono);">1-4</kbd> or <kbd style="background:rgba(51,65,85,0.8); padding:2px 6px; border-radius:4px; font-family:var(--font-mono);">A-D</kbd>
             </span>
-            <button class="btn btn-primary" id="btn-submit-answer" ${selectedIdx === null ? 'disabled' : ''} style="display:inline-flex; align-items:center; gap:8px;">
-              <span>${qIndex >= totalQ - 1 ? 'Submit Final Answer' : 'Next Question'}</span>
+            <button class="btn btn-primary" id="btn-submit-answer" ${answerSubmitted ? (nextQuestionReady ? '' : 'disabled') : (selectedIdx === null ? 'disabled' : '')} style="display:inline-flex; align-items:center; gap:8px;">
+              <span>${qIndex >= totalQ - 1 ? 'Submit Final Answer' : (answerSubmitted ? (nextQuestionReady ? 'Next Question' : 'Waiting for everyone...') : 'Submit Answer')}</span>
               ${icon('arrowRight')}
             </button>
           </div>
@@ -1220,34 +1247,6 @@
           <button class="btn btn-primary btn-block" id="btn-join-another-quiz" style="margin-top:18px;">
             Join Another Quiz
           </button>
-        </div>
-      `;
-    }
-
-    function renderWaitingForNextQuestionHTML() {
-      const p = state.currentParticipant;
-      const quiz = state.selectedQuiz || state.quizzes[0];
-      const answeredCount = state.participants.filter(pt =>
-        pt.quizCode === quiz.code && pt.status !== 'disqualified' &&
-        (pt.answers || []).some(answer => answer.questionId === quiz.questions[state.currentQuestionIndex].id)
-      ).length;
-      const totalCount = state.participants.filter(pt => pt.quizCode === quiz.code && pt.status !== 'disqualified').length;
-
-      return `
-        <div class="battle-card battle-card-sm text-center">
-          <div class="pulse-indicator-wrapper" style="margin: 0 auto 16px;">
-            <div class="pulse-ring-outer"></div>
-            <div class="pulse-ring-inner">${icon('users', 'icon-lg')}</div>
-          </div>
-          <span class="badge-live" style="margin-bottom:8px;">QUESTION COMPLETE</span>
-          <h2 style="font-size:24px; margin-top:6px; margin-bottom:6px;">Waiting for the other students</h2>
-          <p class="text-secondary" style="font-size:13px; margin-bottom:20px;">
-            ${p?.name || 'Your'} answer is recorded. The next question will open when everyone answers or their timer finishes.
-          </p>
-          <div class="notice-box notice-box-cyan" style="text-align:left; margin-bottom:0;">
-            <span class="notice-icon">${icon('clock', 'icon-md')}</span>
-            <div><strong>${answeredCount} of ${totalCount}</strong> students have answered this question.</div>
-          </div>
         </div>
       `;
     }
