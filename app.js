@@ -1416,6 +1416,9 @@
                       <button class="btn btn-primary btn-sm btn-manage-quiz" data-id="${q.id}" style="flex:1;">
                         ${icon('settings', 'icon-sm')} Manage Quiz
                       </button>
+                      <button class="btn btn-success btn-sm btn-dashboard-start-quiz" data-id="${q.id}" title="${q.status === 'active' ? 'Restart Quiz' : 'Start Quiz'}">
+                        ${icon('play', 'icon-sm')} ${q.status === 'active' ? 'Restart' : 'Start'}
+                      </button>
                       <button class="btn btn-danger btn-sm btn-delete-quiz" data-id="${q.id}" title="Delete Quiz">
                         ${icon('trash', 'icon-sm')}
                       </button>
@@ -2312,6 +2315,13 @@
             state.adminView = 'quiz_inside_manage';
             renderApp();
           }
+        });
+      });
+
+      document.querySelectorAll('.btn-dashboard-start-quiz').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const qId = btn.getAttribute('data-id');
+          if (qId) startQuizInside(qId);
         });
       });
 
