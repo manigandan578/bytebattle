@@ -260,6 +260,24 @@
       }
     }
 
+    function saveParticipantRecord(participant) {
+      const latestParticipants = loadParticipants();
+      const mergedParticipants = [
+        ...latestParticipants.filter(item => item.id !== participant.id),
+        participant
+      ];
+      state.participants = [
+        ...state.participants.filter(item => item.id !== participant.id),
+        participant
+      ];
+      localStorage.setItem(STORAGE_KEYS.PARTICIPANTS, JSON.stringify(mergedParticipants));
+      if (supabaseClient) {
+        supabaseClient.from('participants').upsert(participantToRow(participant)).then(({ error }) => {
+          if (error) console.error('Supabase participant sync failed:', error.message);
+        });
+      }
+    }
+
     async function deleteParticipantsForQuiz(quizCode) {
       if (!supabaseClient) return;
       const { error } = await supabaseClient.from('participants').delete().eq('quiz_code', quizCode);
@@ -918,9 +936,7 @@
       };
 
       state.currentParticipant = updatedParticipant;
-      const allUpdated = state.participants.map(p => p.id === updatedParticipant.id ? updatedParticipant : p);
-      state.participants = allUpdated;
-      saveParticipants(allUpdated);
+      saveParticipantRecord(updatedParticipant);
       broadcastMessage('PARTICIPANT_ANSWERED', updatedParticipant);
 
       if (state.currentQuestionIndex >= quiz.questions.length - 1) {
