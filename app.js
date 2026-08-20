@@ -324,7 +324,10 @@
           localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(state.quizzes));
           state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant?.quizCode) || state.selectedQuiz;
           if (syncStudentQuizState()) return;
+          const shouldCelebrateResults = changedQuiz?.status === 'results_revealed' &&
+            ((state.currentView === 'admin') || state.studentStep === 'leaderboard');
           renderApp();
+          if (shouldCelebrateResults) setTimeout(() => triggerConfetti(5000), 250);
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'participants' }, (payload) => {
           const changedParticipant = payload.new ? rowToParticipant(payload.new) : null;
@@ -977,7 +980,13 @@
       state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
       saveQuizzes(state.quizzes);
       broadcastMessage('SHOW_RESULTS', { quizCode: targetQuiz.code });
+      if (state.currentView === 'admin') {
+        state.scoreboardDisplayMode = 'podium';
+        state.scoreboardReturnView = state.adminView;
+        state.adminView = 'live_scoreboard_page';
+      }
       renderApp();
+      setTimeout(() => triggerConfetti(5000), 250);
     }
 
     async function resetSessionInside(quizId) {
