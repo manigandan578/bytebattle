@@ -457,6 +457,8 @@
       newQuizCategory: 'Full-Stack & Web Dev',
       newQuizTimer: 20,
       newQuizPoints: 100,
+      fullscreenWarningMessage: '',
+      fullscreenWarningTimeout: null,
       newQuestions: [
         {
           id: 'q-custom-1',
@@ -514,6 +516,11 @@
         disqualifyCurrentParticipant('Tab Switch / Window minimized detected during live battle');
       }
     });
+
+    document.addEventListener('fullscreenchange', handleFullscreenExitDetection);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenExitDetection);
+    document.addEventListener('mozfullscreenchange', handleFullscreenExitDetection);
+    document.addEventListener('MSFullscreenChange', handleFullscreenExitDetection);
 
     // Multi-Tab Sync listener
     if (syncChannel) {
@@ -655,6 +662,42 @@
       }
     }
 
+    function showFullscreenWarning(message) {
+      state.fullscreenWarningMessage = message;
+      if (state.fullscreenWarningTimeout) {
+        clearTimeout(state.fullscreenWarningTimeout);
+      }
+      renderApp();
+      state.fullscreenWarningTimeout = setTimeout(() => {
+        state.fullscreenWarningMessage = '';
+        if (state.currentView === 'student' && state.studentStep === 'active_quiz') {
+          renderApp();
+        }
+      }, 2800);
+    }
+
+    function requestFullscreenForCurrentStudent() {
+      if (state.currentView !== 'student' || state.studentStep !== 'active_quiz' || !state.currentParticipant) return;
+      const activeElement = document.documentElement;
+      if (!activeElement) return;
+      if (!!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement) return;
+
+      const requestFS = activeElement.requestFullscreen || activeElement.webkitRequestFullscreen || activeElement.msRequestFullscreen;
+      if (typeof requestFS === 'function') {
+        requestFS.call(activeElement).catch(() => {});
+      }
+    }
+
+    function handleFullscreenExitDetection() {
+      const isActiveQuiz = state.currentView === 'student' && state.studentStep === 'active_quiz' && !!state.currentParticipant;
+      const isFullscreen = !!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement;
+
+      if (isActiveQuiz && !isFullscreen) {
+        showFullscreenWarning('Warning: You exited fullscreen. You have been disqualified from this live quiz.');
+        disqualifyCurrentParticipant('Fullscreen exited during live battle');
+      }
+    }
+
     function handleCodeSubmit(code) {
       const clean = code.trim().toUpperCase();
       const matched = state.quizzes.find(q => q.code.toUpperCase() === clean);
@@ -721,6 +764,7 @@
       state.selectedOptionIndex = null;
       state.questionReadyForNext = false;
       startQuestionTimer();
+      setTimeout(() => requestFullscreenForCurrentStudent(), 250);
       renderApp();
     }
 
@@ -1309,8 +1353,19 @@
       const answerSubmitted = isCurrentQuestionAnswered();
       const nextQuestionReady = answerSubmitted && state.questionReadyForNext;
 
+      const fullscreenWarning = state.fullscreenWarningMessage ? `
+        <div class="notice-box notice-box-red" style="margin-bottom: 16px; text-align: left;">
+          <span class="notice-icon">${icon('alertTriangle', 'icon-md')}</span>
+          <div>
+            <strong>Fullscreen Warning</strong>
+            <p style="margin-top: 2px; font-size: 11px; line-height: 1.4;">${state.fullscreenWarningMessage}</p>
+          </div>
+        </div>
+      ` : '';
+
       return `
         <div class="battle-card battle-card-md">
+          ${fullscreenWarning}
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
             <div>
               <span class="font-mono text-cyan" style="font-size:11px; font-weight:700; text-transform:uppercase;">
@@ -1769,7 +1824,7 @@
       const quiz = getManagingQuiz();
       if (!quiz) return renderAdminQuizzesListView();
 
-      const list = state.participants.filter(p => p.quizCode === quiz.code);
+      const list = [...state.participants.filter(p => p.quizCode === quiz.code)].sort((a, b) => (b.score || 0) - (a.score || 0) || (a.totalTimeTakenSeconds || 0) - (b.totalTimeTakenSeconds || 0));
       const isQuizActive = quiz.status === 'active';
 
       return `
@@ -1935,8 +1990,8 @@
                         No students in this lobby yet. Students can join with code <strong class="text-cyan">${quiz.code}</strong>.
                       </td>
                     </tr>
-                  ` : list.map(p => `
-                    <tr>
+                  ` : list.map((p, idx) => `
+                    <tr style="${p.status === 'disqualified' ? 'opacity:0.72; background:rgba(239,68,68,0.04);' : ''}">
                       <td>
                         ${p.status === 'disqualified' ? `
                           <span style="background:rgba(239,68,68,0.2); color:var(--accent-red); padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;">DISQUALIFIED</span>
@@ -1948,10 +2003,10 @@
                           <span style="background:rgba(245,158,11,0.2); color:var(--accent-amber); padding:2px 8px; border-radius:4px; font-weight:bold; font-size:11px;">WAITING</span>
                         `}
                       </td>
-                      <td style="font-weight:700;">${p.name}</td>
+                      <td style="font-weight:700; ${p.status === 'disqualified' ? 'text-decoration:line-through;' : ''}">${p.name} ${p.status === 'disqualified' ? '<span class="text-red font-mono" style="font-size:10px;">#${idx + 1}</span>' : ''}</td>
                       <td class="text-secondary">${p.collegeName} • ${p.department}</td>
-                      <td class="font-mono text-emerald">${p.correctCount}/${quiz.questions.length}</td>
-                      <td class="font-mono text-cyan font-bold">${p.score} PTS</td>
+                      <td class="font-mono text-emerald">${p.status === 'disqualified' ? '-' : `${p.correctCount}/${quiz.questions.length}`}</td>
+                      <td class="font-mono ${p.status === 'disqualified' ? 'text-red' : 'text-cyan'} font-bold">${p.status === 'disqualified' ? '0 PTS' : `${p.score} PTS`}</td>
                       <td style="font-size:11px;">
                         ${p.disqualificationReason ? `<span class="text-red font-mono">${icon('alertTriangle', 'icon-sm')} ${p.disqualificationReason}</span>` : `<span class="text-emerald font-mono">${icon('check', 'icon-sm')} Monitored (Clean)</span>`}
                       </td>
@@ -2009,10 +2064,9 @@
       const quiz = getManagingQuiz();
       if (!quiz) return renderAdminQuizzesListView();
 
-      const list = [...state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified')];
-      list.sort((a, b) => b.score - a.score || a.totalTimeTakenSeconds - b.totalTimeTakenSeconds);
+      const list = [...state.participants.filter(p => p.quizCode === quiz.code && p.status !== 'disqualified')].sort((a, b) => (b.score || 0) - (a.score || 0) || (a.totalTimeTakenSeconds || 0) - (b.totalTimeTakenSeconds || 0));
 
-      const disqualifiedList = state.participants.filter(p => p.quizCode === quiz.code && p.status === 'disqualified');
+      const disqualifiedList = [...state.participants.filter(p => p.quizCode === quiz.code && p.status === 'disqualified')].sort((a, b) => (b.disqualifiedAt || 0) - (a.disqualifiedAt || 0));
       const allQuizPlayers = state.participants.filter(p => p.quizCode === quiz.code);
       const isQuizActive = quiz.status === 'active';
 
