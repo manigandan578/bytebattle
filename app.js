@@ -678,13 +678,33 @@
 
     function requestFullscreenForCurrentStudent() {
       if (state.currentView !== 'student' || state.studentStep !== 'active_quiz' || !state.currentParticipant) return;
-      const activeElement = document.documentElement;
-      if (!activeElement) return;
-      if (!!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement) return;
 
-      const requestFS = activeElement.requestFullscreen || activeElement.webkitRequestFullscreen || activeElement.msRequestFullscreen;
+      const target = document.documentElement || document.body;
+      if (!target) return;
+      const isAlreadyFullscreen = !!document.fullscreenElement || !!document.webkitFullscreenElement || !!document.msFullscreenElement;
+      if (isAlreadyFullscreen) return;
+
+      const requestFS = target.requestFullscreen
+        || target.webkitRequestFullscreen
+        || target.msRequestFullscreen
+        || document.body?.requestFullscreen
+        || document.body?.webkitRequestFullscreen
+        || document.body?.msRequestFullscreen;
+
       if (typeof requestFS === 'function') {
-        requestFS.call(activeElement).catch(() => {});
+        requestFS.call(target).catch(() => {
+          if (document.body && typeof document.body.requestFullscreen === 'function') {
+            document.body.requestFullscreen().catch(() => {});
+          }
+        });
+      }
+
+      try {
+        if (screen.orientation && typeof screen.orientation.lock === 'function') {
+          screen.orientation.lock('landscape').catch(() => {});
+        }
+      } catch (error) {
+        // Some mobile browsers reject orientation locking; this is optional and should not block the quiz.
       }
     }
 
