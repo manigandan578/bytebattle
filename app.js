@@ -307,6 +307,41 @@
     state.selectedQuiz = state.quizzes.find(q => q.code === state.activeQuizCode) || state.quizzes[0];
     state.managingQuizId = state.selectedQuiz ? state.selectedQuiz.id : (state.quizzes[0] ? state.quizzes[0].id : '');
 
+    const savedParticipantId = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_ID);
+    state.currentParticipant = state.participants.find(p => p.id === savedParticipantId) || null;
+    if (state.currentParticipant) {
+      state.selectedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode) || state.selectedQuiz;
+      state.activeQuizCode = state.selectedQuiz?.code || state.activeQuizCode;
+      if (state.selectedQuiz?.status === 'active') {
+        state.studentStep = 'active_quiz';
+        state.currentQuestionIndex = Math.min(
+          state.currentParticipant.answers?.length || 0,
+          Math.max(0, (state.selectedQuiz.questions?.length || 1) - 1)
+        );
+      } else if (state.selectedQuiz?.status === 'results_revealed') {
+        state.studentStep = 'leaderboard';
+      } else {
+        state.studentStep = 'waiting_room';
+      }
+    }
+
+    window.setInterval(() => {
+      if (state.currentView !== 'student' || !state.currentParticipant) return;
+      const previousStatus = state.selectedQuiz?.status;
+      state.quizzes = loadQuizzes();
+      state.participants = loadParticipants();
+      syncStudentQuizState();
+      const joinedQuiz = state.quizzes.find(q => q.code === state.currentParticipant.quizCode);
+      if (!joinedQuiz) return;
+
+      if (joinedQuiz.status === 'lobby' && previousStatus === 'active' && state.studentStep !== 'leaderboard') {
+        clearIntervalTimer();
+        state.selectedQuiz = joinedQuiz;
+        state.studentStep = 'waiting_room';
+        renderApp();
+      }
+    }, 1000);
+
     // Anti-Cheat: Tab-Switch Sensor
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && state.currentView === 'student' && state.studentStep === 'active_quiz') {
@@ -368,6 +403,13 @@
           startQuizForStudent();
           return;
         }
+      }
+
+      if (data.type === 'STOP_QUIZ' && data.payload?.quizCode === state.selectedQuiz?.code) {
+        clearIntervalTimer();
+        state.studentStep = 'waiting_room';
+        renderApp();
+        return;
       }
 
       if (data.type === 'QUESTION_ADVANCE' && state.currentParticipant) {
@@ -686,6 +728,17 @@
       state.activeQuizCode = targetQuiz.code;
       localStorage.setItem(STORAGE_KEYS.ACTIVE_CODE, targetQuiz.code);
       broadcastMessage('START_QUIZ', { quizCode: targetQuiz.code });
+      renderApp();
+    }
+
+    function stopQuizInside(quizId) {
+      const targetQuiz = state.quizzes.find(q => q.id === quizId);
+      if (!targetQuiz) return;
+
+      targetQuiz.status = 'lobby';
+      state.quizzes = state.quizzes.map(q => q.id === targetQuiz.id ? targetQuiz : q);
+      saveQuizzes(state.quizzes);
+      broadcastMessage('STOP_QUIZ', { quizCode: targetQuiz.code });
       renderApp();
     }
 
@@ -1488,8 +1541,8 @@
                       <button class="btn btn-primary btn-sm btn-manage-quiz" data-id="${q.id}" style="flex:1;">
                         ${icon('settings', 'icon-sm')} Manage Quiz
                       </button>
-                      <button class="btn btn-success btn-sm btn-dashboard-start-quiz" data-id="${q.id}" title="${q.status === 'active' ? 'Restart Quiz' : 'Start Quiz'}">
-                        ${icon('play', 'icon-sm')} ${q.status === 'active' ? 'Restart' : 'Start'}
+                      <button class="btn ${q.status === 'active' ? 'btn-danger' : 'btn-success'} btn-sm btn-dashboard-start-quiz" data-id="${q.id}" title="${q.status === 'active' ? 'Stop Quiz' : 'Start Quiz'}">
+                        ${icon(q.status === 'active' ? 'refresh' : 'play', 'icon-sm')} ${q.status === 'active' ? 'Stop' : 'Start'}
                       </button>
                       <button class="btn btn-danger btn-sm btn-delete-quiz" data-id="${q.id}" title="Delete Quiz">
                         ${icon('trash', 'icon-sm')}
@@ -1634,8 +1687,8 @@
             </div>
 
             <div style="display:flex; flex-wrap:wrap; gap:10px;">
-              <button class="btn btn-success" id="btn-inside-start-quiz" data-id="${quiz.id}">
-                ${icon('play', 'icon-sm')} ${isQuizActive ? 'Restart Quiz' : 'Start Quiz'}
+              <button class="btn ${isQuizActive ? 'btn-danger' : 'btn-success'}" id="btn-inside-start-quiz" data-id="${quiz.id}">
+                ${icon(isQuizActive ? 'refresh' : 'play', 'icon-sm')} ${isQuizActive ? 'Stop Quiz' : 'Start Quiz'}
               </button>
               <button class="btn btn-amber" id="btn-inside-show-results" data-id="${quiz.id}">
                 ${icon('trophy', 'icon-sm')} Publish Winners to Users
@@ -1808,8 +1861,8 @@
             </div>
 
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
-              <button class="btn btn-success btn-sm" id="btn-scoreboard-start-quiz" data-id="${quiz.id}">
-                ${icon('play', 'icon-sm')} ${isQuizActive ? 'Restart Quiz' : 'Start Quiz'}
+              <button class="btn ${isQuizActive ? 'btn-danger' : 'btn-success'} btn-sm" id="btn-scoreboard-start-quiz" data-id="${quiz.id}">
+                ${icon(isQuizActive ? 'refresh' : 'play', 'icon-sm')} ${isQuizActive ? 'Stop Quiz' : 'Start Quiz'}
               </button>
               <button class="btn btn-amber btn-sm" id="btn-scoreboard-show-results" data-id="${quiz.id}">
                 ${icon('trophy', 'icon-sm')} Publish Winners to Users
@@ -2397,7 +2450,8 @@
       document.querySelectorAll('.btn-dashboard-start-quiz').forEach(btn => {
         btn.addEventListener('click', () => {
           const qId = btn.getAttribute('data-id');
-          if (qId) startQuizInside(qId);
+          const quiz = state.quizzes.find(q => q.id === qId);
+          if (qId) quiz?.status === 'active' ? stopQuizInside(qId) : startQuizInside(qId);
         });
       });
 
@@ -2437,7 +2491,8 @@
 
       document.getElementById('btn-scoreboard-start-quiz')?.addEventListener('click', (e) => {
         const qId = e.currentTarget.getAttribute('data-id');
-        if (qId) startQuizInside(qId);
+        const quiz = state.quizzes.find(q => q.id === qId);
+        if (qId) quiz?.status === 'active' ? stopQuizInside(qId) : startQuizInside(qId);
       });
 
       document.getElementById('btn-scoreboard-show-results')?.addEventListener('click', (e) => {
@@ -2597,7 +2652,8 @@
 
       document.getElementById('btn-inside-start-quiz')?.addEventListener('click', (e) => {
         const qId = e.currentTarget.getAttribute('data-id');
-        if (qId) startQuizInside(qId);
+        const quiz = state.quizzes.find(q => q.id === qId);
+        if (qId) quiz?.status === 'active' ? stopQuizInside(qId) : startQuizInside(qId);
       });
 
       document.getElementById('btn-inside-show-results')?.addEventListener('click', (e) => {
@@ -2747,4 +2803,7 @@
     }
 
     renderApp();
+    if (state.currentView === 'student' && state.studentStep === 'active_quiz') {
+      startQuestionTimer();
+    }
 
