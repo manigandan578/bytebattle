@@ -1212,6 +1212,10 @@
               </p>
             </div>
           </div>
+
+          <button class="btn btn-primary btn-block" id="btn-join-another-quiz" style="margin-top:18px;">
+            Join Another Quiz
+          </button>
         </div>
       `;
     }
@@ -2395,6 +2399,7 @@
       document.getElementById('btn-return-lobby')?.addEventListener('click', () => {
         clearIntervalTimer();
         state.currentParticipant = null;
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
         state.studentStep = 'code_portal';
         renderApp();
       });
@@ -2402,6 +2407,15 @@
       document.getElementById('btn-play-again')?.addEventListener('click', () => {
         clearIntervalTimer();
         state.currentParticipant = null;
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
+        state.studentStep = 'code_portal';
+        renderApp();
+      });
+
+      document.getElementById('btn-join-another-quiz')?.addEventListener('click', () => {
+        clearIntervalTimer();
+        state.currentParticipant = null;
+        localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_ID);
         state.studentStep = 'code_portal';
         renderApp();
       });
