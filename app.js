@@ -821,7 +821,6 @@
 
       if (everyoneAnswered || timerFinished) {
         state.questionReadyForNext = true;
-        clearIntervalTimer();
         renderApp();
         return true;
       }
