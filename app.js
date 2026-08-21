@@ -1,4 +1,4 @@
-﻿    // Professional SVG Favicon / Icon System
+﻿// Professional SVG Favicon / Icon System
     const ICONS = {
       bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
       shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
@@ -1188,6 +1188,28 @@
       const quiz = state.selectedQuiz;
       const participant = state.currentParticipant;
       const showQuizInHeader = quiz && (state.currentView !== 'student' || state.studentStep !== 'code_portal');
+      const isTakingQuiz = state.currentView === 'student' && state.studentStep === 'active_quiz';
+
+      // Minimal header while a student is actively answering questions —
+      // just the logo and their live point total, so mobile screens keep
+      // maximum room for the question itself.
+      if (isTakingQuiz) {
+        return `
+          <header class="global-header global-header-minimal">
+            <div class="header-container">
+              <div class="brand-logo" id="header-brand-logo">
+                <div class="logo-icon-box">${icon('bolt')}</div>
+                <span class="brand-name font-mono">BYTE<span class="text-cyan">BATTLE</span></span>
+              </div>
+              ${participant ? `
+                <div style="display:inline-flex; align-items:center; gap:8px; font-size:12px; background:#FFFFFF; padding:4px 10px; border-radius:8px; border:2px solid var(--border-color); color:#14201F;">
+                  <span class="font-mono font-bold" style="color:#1E9C6B;">${participant.score} pts</span>
+                </div>
+              ` : ''}
+            </div>
+          </header>
+        `;
+      }
 
       return `
         <header class="global-header">
@@ -1201,10 +1223,10 @@
             </div>
 
             ${showQuizInHeader ? `
-              <div style="display:inline-flex; align-items:center; gap:8px; font-size:12px; background: rgba(30,41,59,0.8); padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border-color);">
+              <div style="display:inline-flex; align-items:center; gap:8px; font-size:12px; background: #FFFFFF; padding: 4px 12px; border-radius: 999px; border: 2px solid var(--border-color);">
                 <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${quiz.status === 'active' ? 'var(--accent-emerald)' : 'var(--accent-cyan)'}; flex-shrink:0;"></span>
-                <span class="text-secondary font-mono truncate" style="max-width:180px;">${quiz.title}</span>
-                <span class="font-mono text-cyan font-bold" style="background:rgba(6,182,212,0.15); padding:2px 6px; border-radius:4px;">${quiz.code}</span>
+                <span class="font-mono truncate" style="max-width:180px; color:#14201F;">${quiz.title}</span>
+                <span class="font-mono font-bold" style="background:#FFD35C; color:#14201F; padding:2px 8px; border-radius:4px; border:1.5px solid #14201F;">${quiz.code}</span>
               </div>
             ` : ''}
 
@@ -1214,9 +1236,9 @@
               </button>
 
               ${state.currentView === 'student' && participant ? `
-                <div style="display:inline-flex; align-items:center; gap:8px; font-size:12px; background:rgba(30,41,59,0.8); padding:4px 10px; border-radius:8px; border:1px solid var(--border-color);">
-                  <span class="font-bold text-cyan">${participant.name}</span>
-                  <span class="font-mono text-emerald">${participant.score} pts</span>
+                <div style="display:inline-flex; align-items:center; gap:8px; font-size:12px; background:#FFFFFF; padding:4px 10px; border-radius:8px; border:2px solid var(--border-color); color:#14201F;">
+                  <span class="font-bold" style="color:#1A4348;">${participant.name}</span>
+                  <span class="font-mono" style="color:#1E9C6B;">${participant.score} pts</span>
                 </div>
               ` : ''}
 
@@ -1254,7 +1276,7 @@
               Live Tournament Arena
             </span>
 
-            <h2 style="font-size: 26px; margin-bottom: 6px; color:#ffffff;">Multiplayer Quiz Portal</h2>
+            <h2 style="font-size: 26px; margin-bottom: 6px; color:#14201F;">Multiplayer Quiz Portal</h2>
             <p class="text-secondary" style="font-size: 13px; margin-bottom: 24px; line-height:1.5;">
               Enter your access code to enter the live quiz session and compete on the real-time leaderboard.
             </p>
@@ -3176,4 +3198,3 @@
       startQuestionTimer();
     }
     initializeSupabaseSync();
-
