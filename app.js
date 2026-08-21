@@ -470,6 +470,7 @@
       currentQuestionIndex: 0,
       selectedOptionIndex: null,
       questionReadyForNext: false,
+      isAdvancingQuestion: false,
       secondsRemaining: 20,
       questionTimerInterval: null,
       adminView: 'quizzes_list',
@@ -835,6 +836,7 @@
       state.currentQuestionIndex = 0;
       state.selectedOptionIndex = null;
       state.questionReadyForNext = false;
+      state.isAdvancingQuestion = false;
       startQuestionTimer();
       setTimeout(() => requestFullscreenForCurrentStudent(), 250);
       renderApp();
@@ -849,6 +851,7 @@
       state.currentQuestionIndex = questionIndex;
       state.selectedOptionIndex = null;
       state.questionReadyForNext = false;
+      state.isAdvancingQuestion = false;
       startQuestionTimer();
       renderApp();
     }
@@ -873,6 +876,9 @@
 
       if (everyoneAnswered || timerFinished) {
         state.questionReadyForNext = true;
+        if (everyoneAnswered && !timerFinished && !state.isAdvancingQuestion) {
+          moveToNextQuestionAfterTimeout();
+        }
         renderApp();
         return true;
       }
@@ -1000,6 +1006,9 @@
       const nextQuestionIndex = state.currentQuestionIndex + 1;
       if (nextQuestionIndex >= quiz.questions.length) return;
 
+      if (state.isAdvancingQuestion) return;
+      state.isAdvancingQuestion = true;
+
       broadcastMessage('QUESTION_ADVANCE', { quizCode: quiz.code, questionIndex: nextQuestionIndex });
       advanceStudentToQuestion(nextQuestionIndex);
     }
@@ -1095,7 +1104,9 @@
       broadcastMessage('SHOW_RESULTS', { quizCode: targetQuiz.code });
       if (state.currentView === 'admin') {
         state.scoreboardDisplayMode = 'podium';
-        state.scoreboardReturnView = state.adminView;
+        state.scoreboardReturnView = state.adminView === 'quizzes_list'
+          ? 'quizzes_list'
+          : 'quiz_inside_manage';
         state.adminView = 'live_scoreboard_page';
       }
       renderApp();
@@ -2819,23 +2830,31 @@
         });
       });
 
-      document.getElementById('btn-view-scoreboard-separate-inside')?.addEventListener('click', () => {
+      document.getElementById('btn-view-scoreboard-separate-inside')?.addEventListener('click', (event) => {
+        event.preventDefault();
         state.scoreboardReturnView = 'quiz_inside_manage';
         state.adminView = 'live_scoreboard_page';
         renderApp();
       });
 
-      document.getElementById('btn-return-from-scoreboard-page')?.addEventListener('click', () => {
-        state.adminView = state.scoreboardReturnView || 'quiz_inside_manage';
+      document.getElementById('btn-return-from-scoreboard-page')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        state.currentView = 'admin';
+        state.isAdminLoggedIn = true;
+        state.adminView = state.scoreboardReturnView === 'quizzes_list'
+          ? 'quizzes_list'
+          : 'quiz_inside_manage';
         renderApp();
       });
 
-      document.getElementById('btn-toggle-scoreboard-mode-table')?.addEventListener('click', () => {
+      document.getElementById('btn-toggle-scoreboard-mode-table')?.addEventListener('click', (event) => {
+        event.preventDefault();
         state.scoreboardDisplayMode = 'live_table';
         renderApp();
       });
 
-      document.getElementById('btn-toggle-scoreboard-mode-podium')?.addEventListener('click', () => {
+      document.getElementById('btn-toggle-scoreboard-mode-podium')?.addEventListener('click', (event) => {
+        event.preventDefault();
         state.scoreboardDisplayMode = 'podium';
         triggerConfetti(3000);
         renderApp();
