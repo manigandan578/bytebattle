@@ -845,7 +845,6 @@
   border-bottom: 2px solid var(--cream-dim);
   color: var(--cream); /* Makes the student name visible at all times */
 }
-
 /* Hover State */
 .scoreboard-table tr:hover { 
   background: var(--pink-dim); 
