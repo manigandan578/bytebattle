@@ -935,10 +935,6 @@
       const quiz = state.selectedQuiz;
       if (!quiz || !state.currentParticipant) return;
 
-      if (!isAuto && state.questionReadyForNext) {
-        advanceStudentToQuestion(state.currentQuestionIndex + 1);
-        return;
-      }
       if (isCurrentQuestionAnswered()) return;
 
       if (isAuto) clearIntervalTimer();
@@ -1182,6 +1178,9 @@
         ${renderFooterHTML()}
       `;
 
+      document.querySelectorAll('#app button:not([type])').forEach(button => {
+        button.type = 'button';
+      });
       attachEventListeners();
     }
 
@@ -1431,7 +1430,6 @@
       const totalQ = quiz.questions.length;
       const selectedIdx = state.selectedOptionIndex;
       const answerSubmitted = isCurrentQuestionAnswered();
-      const nextQuestionReady = answerSubmitted && state.questionReadyForNext;
 
       const fullscreenWarning = state.fullscreenWarningMessage ? `
         <div class="notice-box notice-box-red" style="margin-bottom: 16px; text-align: left;">
@@ -1480,7 +1478,7 @@
               const letter = ['A', 'B', 'C', 'D'][idx];
               const isSelected = selectedIdx === idx;
               return `
-                <button class="option-btn ${isSelected ? 'selected' : ''}" data-index="${idx}" ${answerSubmitted ? 'disabled' : ''}>
+                <button type="button" class="option-btn ${isSelected ? 'selected' : ''}" data-index="${idx}" ${answerSubmitted ? 'disabled' : ''}>
                   <span class="option-badge">${letter}</span>
                   <span style="flex:1;">${opt}</span>
                 </button>
@@ -1492,8 +1490,8 @@
             <span class="text-muted" style="font-size:12px;">
               Keyboard: <kbd style="background:rgba(51,65,85,0.8); padding:2px 6px; border-radius:4px; font-family:var(--font-mono);">1-4</kbd> or <kbd style="background:rgba(51,65,85,0.8); padding:2px 6px; border-radius:4px; font-family:var(--font-mono);">A-D</kbd>
             </span>
-            <button class="btn btn-primary" id="btn-submit-answer" ${answerSubmitted ? (nextQuestionReady ? '' : 'disabled') : (selectedIdx === null ? 'disabled' : '')} style="display:inline-flex; align-items:center; gap:8px;">
-              <span>${qIndex >= totalQ - 1 ? 'Submit Final Answer' : (answerSubmitted ? (nextQuestionReady ? 'Next Question' : 'Waiting for everyone...') : 'Submit Answer')}</span>
+            <button type="button" class="btn btn-primary" id="btn-submit-answer" ${answerSubmitted || selectedIdx === null ? 'disabled' : ''} style="display:inline-flex; align-items:center; gap:8px;">
+              <span>${qIndex >= totalQ - 1 ? 'Submit Final Answer' : (answerSubmitted ? 'Answer submitted' : 'Submit Answer')}</span>
               ${icon('arrowRight')}
             </button>
           </div>
